@@ -1,0 +1,29 @@
+.hidden {
+    display: none;
+}
+
+@keyframes blinking {
+    50% {
+        opacity: 0;
+    }
+}
+
+.blink {
+    animation: blinking 1.5s linear infinite;
+}
+
+.airplanes {
+    list-style: none;
+    padding: 0;
+}
+
+.airplane {
+    background: lightblue;
+    margin: 1rem;
+    padding: 0.5rem;
+}
+
+.heading-arrow {
+    font-size: 2rem;
+    display: inline-block;
+}

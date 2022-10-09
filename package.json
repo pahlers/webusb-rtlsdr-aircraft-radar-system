@@ -1,0 +1,33 @@
+{
+  "name": "webusb-rtlsdr-aircraft-radar-system",
+  "version": "1.0.0",
+  "description": "Demo of the airplanes tracker. After clicking on a button to start the connection with the RTL-SDR USB device, live data from an airplane is being displayed on the screen, include raw latitude, longitude, altitude.",
+  "main": "index.js",
+  "scripts": {
+    "serve": "parcel ./src/index.html"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pahlers/webusb-rtlsdr-aircraft-radar-system.git"
+  },
+  "author": "charliegerard",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/pahlers/webusb-rtlsdr-aircraft-radar-system/issues"
+  },
+  "homepage": "https://github.com/pahlers/webusb-rtlsdr-aircraft-radar-system#readme",
+  "dependencies": {
+    "idb": "^7.1.0",
+    "rtlsdrjs": "github:pahlers/rtlsdrjs",
+    "rxjs": "^7.5.7"
+  },
+  "devDependencies": {
+    "assert": "^2.0.0",
+    "buffer": "^6.0.3",
+    "os-browserify": "^0.3.0",
+    "parcel": "^2.7.0",
+    "path-browserify": "^1.0.1",
+    "process": "^0.11.10",
+    "util": "^0.12.4"
+  }
+}
