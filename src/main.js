@@ -1,30 +1,29 @@
-import {
-    exhaustMap,
-    from,
-    fromEvent,
-    interval,
-    map,
-    mergeMap,
-    Observable,
-    scan,
-    skipWhile,
-    startWith,
-    take,
-    tap
-} from 'rxjs';
-import {RtlSdr} from 'rtlsdrjs';
-import {Demodulator} from "./lib/demodulator";
-import {distinctUntilChanged} from "rxjs/src/internal/operators/distinctUntilChanged";
+import {concatMap, exhaustMap, from, fromEvent, interval, map, mergeMap, scan, share, skipWhile, take, tap} from 'rxjs';
+import {RtlSdr, webUsb} from 'rtlsdrjs';
+import {Demodulator} from './lib/demodulator';
+import {distinctUntilChanged} from 'rxjs/src/internal/operators/distinctUntilChanged';
+import {openDB} from 'idb/with-async-ittr.js';
+import {cumulativeData, toggle} from './helpers';
 
 console.log('[✈✈✈ tracker] start');
 
-const connectButton = document.querySelector('.connect')
-const mainElement = document.querySelector('main');
-const mainTemplate = document.querySelector('.mainTemplate');
+const connectButton = document.querySelector('.connect');
+const notifyButton = document.querySelector('.notify');
+const metaElement = document.querySelector('.meta');
+const airplanesListElement = document.querySelector('.airplanes');
 const airplaneTemplate = document.querySelector('.airplaneTemplate');
-const waitingElement = document.querySelector('.waiting');
 const demodulator = new Demodulator();
+const demodulatorProcess = data => new Promise((resolve) => demodulator.process(data, 256000, resolve));
+
 let sdr;
+let db;
+const storeName = 'airplanes';
+
+const toggle$ = fromEvent(connectButton, 'click')
+    .pipe(
+        scan((t) => !t, false),
+        tap((t) => console.log(`[✈✈✈ tracker] ${t ? '' : 'not '}listening`)),
+    );
 
 fromEvent(connectButton, 'click')
     .pipe(
@@ -32,7 +31,7 @@ fromEvent(connectButton, 'click')
         take(1)
     )
     .subscribe(async () => {
-        const rtlSdr = await RtlSdr.requestDevice();
+        const rtlSdr = await RtlSdr.requestDevice(webUsb);
 
         //
         // open the device
@@ -63,152 +62,168 @@ fromEvent(connectButton, 'click')
         sdr = rtlSdr;
         console.log('[✈✈✈ tracker] connected');
 
-        waitingElement.classList.remove('hidden');
+        db = await openDB('✈', 1, {
+            upgrade(db) {
+                // Create a store of objects
+                const store = db.createObjectStore(storeName, {
+                    // The 'id' property of the object will be the key.
+                    keyPath: 'id',
+                    // If it isn't explicitly set, create a value by auto incrementing.
+                    autoIncrement: false,
+                });
+                // Create an index on the 'date' property of the objects.
+                store.createIndex('signupTimestamp', 'signupTimestamp');
+            },
+        });
+
+        console.log('[✈✈✈ tracker] db ready');
+
+        const airplanesElements = (await db.getAllFromIndex(storeName, 'signupTimestamp') ?? [])
+            .map(createAirplaneElement)
+            .reverse();
+
+        airplanesListElement.replaceChildren(...airplanesElements);
     });
 
-const toggle$ = fromEvent(connectButton, 'click')
+
+const ping = interval(25)
     .pipe(
-        scan((t) => !t, false),
-        tap((t) => console.log(`[✈✈✈ tracker] ${t ? '' : 'not '}listening`)),
-    )
-
-const demodulatorProcess = data => new Promise((resolve) => demodulator.process(data, 256000, resolve));
-
-function cumulativeData(
-    {speed: pSpeed, altitude: pAltitude, heading: pHeading} = {},
-    {speed: cSpeed, altitude: cAltitude, heading: cHeading, timestamp} = {}
-) {
-    return {
-        speed: cSpeed ?? pSpeed,
-        altitude: cAltitude ?? pAltitude,
-        heading: cHeading ?? pHeading,
-        timestamp
-    };
-}
-
-function sortBySignupTimestamp(a, b) {
-    return new Date(a.signupTimestamp) - new Date(b.signupTimestamp);
-}
-
-interval(25)
-    .pipe(
+        toggle(toggle$),
         skipWhile(() => !sdr), // wait till sdr is ready
         exhaustMap(() => from(sdr.readSamples(16 * 16384)).pipe(map(samples => new Uint8Array(samples)))), // read message
         mergeMap(samples => from(demodulatorProcess(samples))), // process message
         distinctUntilChanged(({msg: previousMsg}, {msg: currentMsg}) => previousMsg.toString() === currentMsg.toString()), // filter doubles
+        share()
+    )
+
+// Update general stats
+ping
+    .pipe(
+        scan(({airplanes, amountMessages}, {icao}) => {
+            return {
+                airplanes: [...airplanes, airplanes.includes(icao) ? undefined : icao].filter(n => !!n),
+                amountMessages: amountMessages + 1
+            };
+        }, {
+            airplanes: [],
+            amountMessages: 0
+        })
+    )
+    .subscribe(({airplanes, amountMessages}) => {
+        metaElement.querySelector('.airplanes-amount').innerText = airplanes.length;
+        metaElement.querySelector('.messages-amount').innerText = amountMessages;
+    });
+
+// Update airplane info
+ping
+    .pipe(
         map(message => ({ // add extra info
             ...message,
             icaoHex: message.icao.toString(16).toUpperCase(),
             timestamp: (new Date()).toISOString(),
             msg: undefined
         })),
-        scan((acc, message) => { // combine information
+        concatMap(async message => { // combine information
             const id = message.icaoHex;
-            const airplane = acc[id] ?? {id, signupTimestamp: (new Date()).toISOString()};
+
+            const airplane = await db.get(storeName, id) ?? {
+                id,
+                signupTimestamp: (new Date()).toISOString()
+            };
+
+            airplane.type = airplane.type ? 'update' : 'new';
+
             const messages = [...(airplane?.messages ?? []), message];
-
-            return {
-                ...acc,
-                [id]: {
-                    ...airplane,
-                    latestMessage: message,
-                    messages,
-                    cumulativeData: cumulativeData(airplane?.cumulativeData, message)
-                },
-                _meta: {
-                    type: airplane ? 'update' : 'new',
-                    current: id
-                }
+            const updatedAirplane = {
+                ...airplane,
+                latestMessage: message,
+                messages,
+                cumulativeData: cumulativeData(airplane?.cumulativeData, message)
             };
-        }, JSON.parse(localStorage.getItem('✈') ?? '{}')),
-        tap(data => localStorage.setItem('✈', JSON.stringify(data))),
-        toggle(toggle$), // on/off
-        startWith(JSON.parse(localStorage.getItem('✈') ?? '{}'))
+
+            await db.put(storeName, updatedAirplane);
+
+            return updatedAirplane;
+        }),
     )
-    .subscribe(data => {
-        const {type = '', current: currentId = ''} = data?._meta ?? {};
-        const airplanes = Object.entries(data)
-            .filter(([key]) => key !== '_meta')
-            .map(([_, value]) => value);
+    .subscribe(renderAirplane);
 
-        const mainClone = mainTemplate.content.cloneNode(true);
+function renderAirplane(data) {
+    const {type, id} = data;
 
-        mainClone.querySelector('.newMessage .type').innerText = type;
-        mainClone.querySelector('.newMessage .id').innerText = currentId;
+    if (type === 'new' && Notification.permission === 'granted') {
+        new Notification(`[✈✈✈ tracker] Tracking ${id}`)
+    }
 
-        const airplaneElements = airplanes
-            .map(({id, signupTimestamp, messages, cumulativeData: {speed, altitude, heading, timestamp}}) => {
-                const airplaneClone = airplaneTemplate.content.cloneNode(true);
+    const airplaneClone = createAirplaneElement(data);
 
-                airplaneClone.querySelector('.icao').innerText = id;
-
-                airplaneClone.querySelector('.signup-timestamp').innerText = `${signupTimestamp}`;
-                airplaneClone.querySelector('.message-timestamp').innerText = `${timestamp}`;
-                airplaneClone.querySelector('.messages-amount').innerText = messages.length;
-
-                let speedElement = airplaneClone.querySelector('.speed-knot');
-                speedElement.innerText = `${new Intl.NumberFormat('en', {
-                    notation: 'standard'
-                }).format(speed ?? 0)} kts`;
-                speedElement.title = `${new Intl.NumberFormat('en', {
-                    style: 'unit',
-                    unit: 'kilometer-per-hour'
-                }).format(((speed ?? 0) * 1.852))}`;
-
-                let altitudeElement = airplaneClone.querySelector('.altitude-foot');
-                altitudeElement.innerText = `${new Intl.NumberFormat('en', {
-                    style: 'unit',
-                    unit: 'foot'
-                }).format(altitude ?? 0)}`;
-                altitudeElement.title = `${new Intl.NumberFormat('en', {
-                    style: 'unit',
-                    unit: 'meter'
-                }).format(((altitude ?? 0) * 0.3048))}`;
-
-                airplaneClone.querySelector('.heading').innerText = `${new Intl.NumberFormat('en', {
-                    style: 'unit',
-                    unit: 'degree'
-                }).format(heading ?? 0)}`;
-                airplaneClone.querySelector('.heading-arrow').style = `transform: rotate(${heading}deg);`
-
-                return airplaneClone;
-            })
-            .sort(sortBySignupTimestamp)
-            .reverse();
-
-        const amountMessages = airplanes.reduce((acc, {messages}) => acc + messages.length, 0);
-
-        mainClone.querySelector('.newMessage .airplanes-amount').innerText = airplanes.length;
-        mainClone.querySelector('.newMessage .messages-amount').innerText = amountMessages;
-        mainClone.querySelector('.airplanes').replaceChildren(...airplaneElements);
-
-        mainElement.replaceChildren(mainClone);
-    });
-
-function toggle(toggleObservable) {
-    return (observable) =>
-        new Observable(subscriber => {
-            let toggled = false;
-            const toggleSubscription = toggleObservable.subscribe(t => toggled = t);
-
-            const subscription = observable.subscribe({
-                next(value) {
-                    if (toggled) {
-                        subscriber.next(value);
-                    }
-                },
-                error(err) {
-                    subscriber.error(err);
-                },
-                complete() {
-                    subscriber.complete();
-                },
-            });
-
-            subscription.add(toggleSubscription);
-
-            return () => {
-                subscription.unsubscribe();
-            };
-        });
+    const airplaneElement = airplanesListElement.querySelector(`.airplane--${id}`);
+    if (airplaneElement) {
+        airplaneElement.replaceWith(airplaneClone);
+    } else {
+        airplanesListElement.prepend(airplaneClone);
+    }
 }
+
+function createAirplaneElement({
+                                   id,
+                                   type,
+                                   signupTimestamp,
+                                   messages,
+                                   cumulativeData: {speed, altitude, heading, timestamp}
+                               }) {
+    const airplaneClone = airplaneTemplate.content.cloneNode(true);
+    airplaneClone.querySelector('.airplane').classList.add(`airplane--${id}`, `airplane-transition--${type}`);
+
+    airplaneClone.querySelector('.icao').innerText = id;
+
+    airplaneClone.querySelector('.signup-timestamp').innerText = `${signupTimestamp}`;
+    airplaneClone.querySelector('.message-timestamp').innerText = `${timestamp}`;
+    airplaneClone.querySelector('.messages-amount').innerText = messages.length;
+
+    let speedElement = airplaneClone.querySelector('.speed-knot');
+    speedElement.innerText = `${new Intl.NumberFormat('en', {
+        notation: 'standard'
+    }).format(speed ?? 0)} kts`;
+    speedElement.title = `${new Intl.NumberFormat('en', {
+        style: 'unit',
+        unit: 'kilometer-per-hour'
+    }).format(((speed ?? 0) * 1.852))}`;
+
+    let altitudeElement = airplaneClone.querySelector('.altitude-foot');
+    altitudeElement.innerText = `${new Intl.NumberFormat('en', {
+        style: 'unit',
+        unit: 'foot'
+    }).format(altitude ?? 0)}`;
+    altitudeElement.title = `${new Intl.NumberFormat('en', {
+        style: 'unit',
+        unit: 'meter'
+    }).format(((altitude ?? 0) * 0.3048))}`;
+
+    airplaneClone.querySelector('.heading').innerText = `${new Intl.NumberFormat('en', {
+        style: 'unit',
+        unit: 'degree'
+    }).format(heading ?? 0)}`;
+    airplaneClone.querySelector('.heading-arrow').style = `transform: rotate(${heading}deg);`;
+
+    airplaneClone.ontransitionend = function () {
+        airplaneClone.classList.remove(`airplane-transition--${type}`);
+    }
+
+    return airplaneClone;
+}
+
+fromEvent(notifyButton, 'click')
+    .subscribe(() => {
+        if (Notification.permission === 'granted') {
+            new Notification('[✈✈✈ tracker] notifications enabled');
+
+        } else if (Notification.permission !== `denied`) {
+            Notification.requestPermission()
+                .then(function (permission) {
+                    if (permission === 'granted') {
+                        new Notification('[✈✈✈ tracker] notifications enabled');
+                    }
+                });
+        }
+    });
