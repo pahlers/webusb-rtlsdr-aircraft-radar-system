@@ -27,3 +27,13 @@
     font-size: 2rem;
     display: inline-block;
 }
+
+.airplane-transition--new {
+    background: red;
+    animation: blinking 3s ease;
+}
+
+.airplane-transition--update {
+    animation: blinking 0.5s ease;
+}
+

@@ -10,38 +10,30 @@
 <body>
 <section>
     <button class="connect">(Dis)connect to antenna</button>
+    <button class="notify">Enable notification</button>
 </section>
 
 <main>
-    <div class="waiting hidden blink">Waiting for ✈✈✈</div>
-</main>
-
-<template class="mainTemplate">
-    <div class="newMessage">
-        <p>
-            Type: "<span class="type"></span>" Airplane: "<span class="id"></span>"
-        </p>
-        <p>
-            Amount airplanes: <span class="airplanes-amount"></span> Amount messages: <span
-                class="messages-amount"></span>
-        </p>
+    <div class="meta">
+        Traced airplanes: <span class="airplanes-amount">0</span>
+        Fetched messages: <span class="messages-amount">0</span>
     </div>
 
     <ul class="airplanes"></ul>
-</template>
+</main>
 
 <template class="airplaneTemplate">
     <li class="airplane">
         <h2 class="icao"></h2>
         <p>
-            Sign up <span class="signup-timestamp"></span> Last update: <span class="message-timestamp"></span> Amount messages: <span class="messages-amount">0</span>
+            Sign up <span class="signup-timestamp"></span> Last update: <span class="message-timestamp"></span> Amount
+            messages: <span class="messages-amount">0</span>
         </p>
         <p>
             SPD: <span class="speed-knot"></span><br>
             ALT: <span class="altitude-foot"></span><br>
             HEAD: <span class="heading"></span> <span class="heading-arrow">⇮</span>
         </p>
-
     </li>
 </template>
 </body>
