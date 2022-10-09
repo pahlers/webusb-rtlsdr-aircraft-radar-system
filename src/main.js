@@ -4,6 +4,7 @@ import {Demodulator} from './lib/demodulator';
 import {distinctUntilChanged} from 'rxjs/src/internal/operators/distinctUntilChanged';
 import {openDB} from 'idb/with-async-ittr.js';
 import {cumulativeData, toggle} from './helpers';
+import {decodeCPR} from "./lib/decodeCPR";
 
 console.log('[✈✈✈ tracker] start');
 
@@ -114,30 +115,56 @@ ping
         metaElement.querySelector('.messages-amount').innerText = amountMessages;
     });
 
+function isPositionCorrect(lat, lng) {
+    return Math.floor(lat) === 52 && Math.floor(lng) === 5;
+}
+
 // Update airplane info
 ping
     .pipe(
-        map(message => ({ // add extra info
+        map(message => ({ // Remove raw message
             ...message,
-            icaoHex: message.icao.toString(16).toUpperCase(),
+            id: message.icao.toString(16).toUpperCase(),
             timestamp: (new Date()).toISOString(),
+            position: {},
             msg: undefined
         })),
         concatMap(async message => { // combine information
-            const id = message.icaoHex;
+            console.log('message', message.id, message.speed, message.altitude, message.heading, message.rawLatitude, message.rawLongitude)
 
+            const id = message.id;
             const airplane = await db.get(storeName, id) ?? {
                 id,
-                signupTimestamp: (new Date()).toISOString()
+                signupTimestamp: (new Date()).toISOString(),
             };
+
+            if (!airplane.position) {
+                airplane.position = {};
+            }
 
             airplane.type = airplane.type ? 'update' : 'new';
 
-            const messages = [...(airplane?.messages ?? []), message];
+            if (message.metype >= 9 && message.metype <= 18) {
+                airplane.position[message.fflag ? 'odd' : 'even'] = {
+                    lat: message.rawLatitude,
+                    lng: message.rawLongitude,
+                    time: Date.now()
+                };
+
+                // if the two messages are less than 10 seconds apart, compute the position
+                if (Math.abs(airplane.position?.even?.time - airplane.position?.odd?.time) <= 60000) {
+                    const position = decodeCPR(airplane.position.odd, airplane.position.even);
+
+                    if (isPositionCorrect(position.lat, position.lng)) {
+                        message.position = position;
+                    }
+                }
+            }
+
             const updatedAirplane = {
                 ...airplane,
                 latestMessage: message,
-                messages,
+                messages: [...(airplane?.messages ?? []), message],
                 cumulativeData: cumulativeData(airplane?.cumulativeData, message)
             };
 
@@ -152,7 +179,7 @@ function renderAirplane(data) {
     const {type, id} = data;
 
     if (type === 'new' && Notification.permission === 'granted') {
-        new Notification(`[✈✈✈ tracker] Tracking ${id}`)
+        new Notification(`[✈✈✈ tracker] Tracking ${id}`);
     }
 
     const airplaneClone = createAirplaneElement(data);
@@ -170,7 +197,7 @@ function createAirplaneElement({
                                    type,
                                    signupTimestamp,
                                    messages,
-                                   cumulativeData: {speed, altitude, heading, timestamp}
+                                   cumulativeData: {speed, altitude, heading, position, timestamp}
                                }) {
     const airplaneClone = airplaneTemplate.content.cloneNode(true);
     airplaneClone.querySelector('.airplane').classList.add(`airplane--${id}`, `airplane-transition--${type}`);
@@ -205,6 +232,11 @@ function createAirplaneElement({
         unit: 'degree'
     }).format(heading ?? 0)}`;
     airplaneClone.querySelector('.heading-arrow').style = `transform: rotate(${heading}deg);`;
+
+    if (isPositionCorrect(position?.lat, position?.lng)) {
+        airplaneClone.querySelector('.lat').innerText = position.lat;
+        airplaneClone.querySelector('.lng').innerText = position.lng;
+    }
 
     airplaneClone.ontransitionend = function () {
         airplaneClone.classList.remove(`airplane-transition--${type}`);

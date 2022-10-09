@@ -29,17 +29,14 @@ export function toggle(toggleObservable) {
 }
 
 export function cumulativeData(
-    {speed: pSpeed, altitude: pAltitude, heading: pHeading} = {},
-    {speed: cSpeed, altitude: cAltitude, heading: cHeading, timestamp} = {}
+    {speed: pSpeed, altitude: pAltitude, heading: pHeading, position: pPosition} = {},
+    {speed: cSpeed, altitude: cAltitude, heading: cHeading, position: cPosition, timestamp} = {}
 ) {
     return {
         speed: cSpeed ?? pSpeed,
         altitude: cAltitude ?? pAltitude,
         heading: cHeading ?? pHeading,
+        position: cPosition ?? pPosition,
         timestamp
     };
-}
-
-export function sortBySignupTimestamp(a, b) {
-    return new Date(a.signupTimestamp) - new Date(b.signupTimestamp);
 }
