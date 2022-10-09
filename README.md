@@ -11,10 +11,14 @@ If you'd like to learn more, you can check out the [blog post](https://charliege
 As it doesn't use any front-end framework, you can start it quickly by running: 
 
 ```bash
-python -m http.server 8000
+npm start
 ```
 
-and opening your browser on http://localhost:8000
+and opening your browser on http://localhost:1234
+
+Also, this version:
+- Shows notifications when a new airplane is spotted
+- Stores the data in the indexedDB for later usage
 
 ## Credits
 
