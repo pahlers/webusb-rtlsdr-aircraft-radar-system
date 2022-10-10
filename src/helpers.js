@@ -36,7 +36,11 @@ export function cumulativeData(
         speed: cSpeed ?? pSpeed,
         altitude: cAltitude ?? pAltitude,
         heading: cHeading ?? pHeading,
-        position: cPosition ?? pPosition,
+        position: cPosition?.correct ? cPosition : pPosition,
         timestamp
     };
+}
+
+export function isPositionCorrect(lat, lng) {
+    return Math.floor(lat) === 52 && Math.floor(lng) === 5;
 }

@@ -17,6 +17,7 @@
     <div class="meta">
         Traced airplanes: <span class="airplanes-amount">0</span>
         Fetched messages: <span class="messages-amount">0</span>
+        Latest airplane: <a href="#" class="latest-airplane"></a>
     </div>
 
     <ul class="airplanes"></ul>
@@ -24,7 +25,7 @@
 
 <template class="airplaneTemplate">
     <li class="airplane">
-        <h2 class="icao"></h2>
+        <h2><span class="icao"></span> <span class="callsign">--</span></h2>
         <p>
             Sign up <span class="signup-timestamp">--</span> Last update: <span class="message-timestamp">--</span> Amount
             messages: <span class="messages-amount">0</span>
@@ -32,7 +33,7 @@
         <p>
             SPD: <span class="speed-knot">--</span><br>
             ALT: <span class="altitude-foot">--</span><br>
-            HEAD: <span class="heading">--</span> <span class="heading-arrow">⇮</span>
+            HDG: <span class="heading">--</span> <span class="heading-arrow">⇮</span>
         </p>
         <p>
             LAT: <span class="lat">--</span><br>

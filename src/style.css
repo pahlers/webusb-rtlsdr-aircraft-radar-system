@@ -1,3 +1,10 @@
+body {
+    background: #23353d;
+    color: #999999;
+    font-family: "Open Sans", sans-serif;
+    font-size: 14px;
+}
+
 .hidden {
     display: none;
 }
@@ -18,9 +25,11 @@
 }
 
 .airplane {
-    background: lightblue;
+    background: #325562;
     margin: 1rem;
     padding: 0.5rem;
+    border-radius: 1rem;
+    transition: background-color 1s 5s ease, color 1s 5s ease;
 }
 
 .heading-arrow {
@@ -29,11 +38,14 @@
 }
 
 .airplane-transition--new {
-    background: red;
+    background: #ee505a;
+    color: #222222;
     animation: blinking 3s ease;
 }
 
 .airplane-transition--update {
+    background: #C7A424;
+    color: #222222;
     animation: blinking 0.5s ease;
 }
 

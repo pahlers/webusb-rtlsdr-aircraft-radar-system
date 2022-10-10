@@ -3,7 +3,7 @@ import {RtlSdr, webUsb} from 'rtlsdrjs';
 import {Demodulator} from './lib/demodulator';
 import {distinctUntilChanged} from 'rxjs/src/internal/operators/distinctUntilChanged';
 import {openDB} from 'idb/with-async-ittr.js';
-import {cumulativeData, toggle} from './helpers';
+import {cumulativeData, isPositionCorrect, toggle} from './helpers';
 import {decodeCPR} from "./lib/decodeCPR";
 
 console.log('[✈✈✈ tracker] start');
@@ -86,42 +86,13 @@ fromEvent(connectButton, 'click')
         airplanesListElement.replaceChildren(...airplanesElements);
     });
 
-
-const ping = interval(25)
+const ping = interval(30)
     .pipe(
         toggle(toggle$),
         skipWhile(() => !sdr), // wait till sdr is ready
         exhaustMap(() => from(sdr.readSamples(16 * 16384)).pipe(map(samples => new Uint8Array(samples)))), // read message
         mergeMap(samples => from(demodulatorProcess(samples))), // process message
         distinctUntilChanged(({msg: previousMsg}, {msg: currentMsg}) => previousMsg.toString() === currentMsg.toString()), // filter doubles
-        share()
-    )
-
-// Update general stats
-ping
-    .pipe(
-        scan(({airplanes, amountMessages}, {icao}) => {
-            return {
-                airplanes: [...airplanes, airplanes.includes(icao) ? undefined : icao].filter(n => !!n),
-                amountMessages: amountMessages + 1
-            };
-        }, {
-            airplanes: [],
-            amountMessages: 0
-        })
-    )
-    .subscribe(({airplanes, amountMessages}) => {
-        metaElement.querySelector('.airplanes-amount').innerText = airplanes.length;
-        metaElement.querySelector('.messages-amount').innerText = amountMessages;
-    });
-
-function isPositionCorrect(lat, lng) {
-    return Math.floor(lat) === 52 && Math.floor(lng) === 5;
-}
-
-// Update airplane info
-ping
-    .pipe(
         map(message => ({ // Remove raw message
             ...message,
             id: message.icao.toString(16).toUpperCase(),
@@ -129,12 +100,41 @@ ping
             position: {},
             msg: undefined
         })),
+        share()
+    )
+
+// Update general stats
+ping
+    .pipe(
+        scan(({airplanes, amountMessages}, {id, callsign}) => {
+            return {
+                airplanes: [...airplanes, airplanes.includes(id) ? undefined : id].filter(n => !!n),
+                amountMessages: amountMessages + 1,
+                latestAirplane: `${id} ${callsign}`
+            };
+        }, {
+            airplanes: [],
+            amountMessages: 0,
+            latestAirplane: ''
+        })
+    )
+    .subscribe(({airplanes, amountMessages, latestAirplane}) => {
+        metaElement.querySelector('.airplanes-amount').innerText = airplanes.length;
+        metaElement.querySelector('.messages-amount').innerText = amountMessages;
+        metaElement.querySelector('.latest-airplane').innerText = latestAirplane;
+        metaElement.querySelector('.latest-airplane').setAttribute('href', `#airplane-${latestAirplane}`);
+    });
+
+// Update airplane info
+ping
+    .pipe(
         concatMap(async message => { // combine information
-            console.log('message', message.id, message.speed, message.altitude, message.heading, message.rawLatitude, message.rawLongitude)
+            console.log('message', message.id, message.callsign, message.speed, message.altitude, message.heading, message.rawLatitude, message.rawLongitude)
 
             const id = message.id;
             const airplane = await db.get(storeName, id) ?? {
                 id,
+                messages: [],
                 signupTimestamp: (new Date()).toISOString(),
             };
 
@@ -155,16 +155,15 @@ ping
                 if (Math.abs(airplane.position?.even?.time - airplane.position?.odd?.time) <= 60000) {
                     const position = decodeCPR(airplane.position.odd, airplane.position.even);
 
-                    if (isPositionCorrect(position.lat, position.lng)) {
-                        message.position = position;
-                    }
+                    message.position = {...position, correct: isPositionCorrect(position?.lat, position?.lng)};
                 }
             }
 
             const updatedAirplane = {
                 ...airplane,
+                callsign: message.callsign && message.callsign.length > 0 ? message.callsign : undefined,
                 latestMessage: message,
-                messages: [...(airplane?.messages ?? []), message],
+                messages: [...airplane.messages, message],
                 cumulativeData: cumulativeData(airplane?.cumulativeData, message)
             };
 
@@ -184,7 +183,7 @@ function renderAirplane(data) {
 
     const airplaneClone = createAirplaneElement(data);
 
-    const airplaneElement = airplanesListElement.querySelector(`.airplane--${id}`);
+    const airplaneElement = airplanesListElement.querySelector(`#airplane-${id}`);
     if (airplaneElement) {
         airplaneElement.replaceWith(airplaneClone);
     } else {
@@ -192,17 +191,22 @@ function renderAirplane(data) {
     }
 }
 
-function createAirplaneElement({
-                                   id,
-                                   type,
-                                   signupTimestamp,
-                                   messages,
-                                   cumulativeData: {speed, altitude, heading, position, timestamp}
-                               }) {
+function createAirplaneElement(
+    {
+        id,
+        callsign,
+        type,
+        signupTimestamp,
+        messages,
+        cumulativeData: {callsign: cdCallsign, speed, altitude, heading, position, timestamp}
+    }
+) {
     const airplaneClone = airplaneTemplate.content.cloneNode(true);
-    airplaneClone.querySelector('.airplane').classList.add(`airplane--${id}`, `airplane-transition--${type}`);
+    airplaneClone.querySelector('.airplane').id = `airplane-${id}`;
+    airplaneClone.querySelector('.airplane').classList.add(`airplane-transition--${type}`);
 
     airplaneClone.querySelector('.icao').innerText = id;
+    airplaneClone.querySelector('.callsign').innerText = callsign ?? cdCallsign ?? '';
 
     airplaneClone.querySelector('.signup-timestamp').innerText = `${signupTimestamp}`;
     airplaneClone.querySelector('.message-timestamp').innerText = `${timestamp}`;
@@ -233,14 +237,18 @@ function createAirplaneElement({
     }).format(heading ?? 0)}`;
     airplaneClone.querySelector('.heading-arrow').style = `transform: rotate(${heading}deg);`;
 
-    if (isPositionCorrect(position?.lat, position?.lng)) {
+    if (position?.correct) {
         airplaneClone.querySelector('.lat').innerText = position.lat;
         airplaneClone.querySelector('.lng').innerText = position.lng;
     }
 
-    airplaneClone.ontransitionend = function () {
-        airplaneClone.classList.remove(`airplane-transition--${type}`);
-    }
+    fromEvent(airplaneClone.querySelector('.airplane'), 'animationend')
+        .pipe(
+            take(1)
+        )
+        .subscribe(({target}) => {
+            target.classList.remove(`airplane-transition--${type}`);
+        });
 
     return airplaneClone;
 }
