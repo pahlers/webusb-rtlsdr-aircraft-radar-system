@@ -11,12 +11,14 @@ body {
 
 @keyframes blinking {
     50% {
-        opacity: 0;
+        opacity: 10%;
     }
 }
 
-.blink {
-    animation: blinking 1.5s linear infinite;
+@keyframes timer {
+    to {
+        opacity: 0;
+    }
 }
 
 .airplanes {
@@ -24,17 +26,18 @@ body {
     padding: 0;
 }
 
-.airplane {
+air-plane {
+    display: list-item;
     background: #325562;
     margin: 1rem;
-    padding: 0.5rem;
     border-radius: 1rem;
+    opacity: 1;
     transition: background-color 1s 5s ease, color 1s 5s ease;
+    animation: timer 1s ease 600s;
 }
 
-.heading-arrow {
-    font-size: 2rem;
-    display: inline-block;
+air-plane::part(map) {
+    filter: url("assets/filter.svg#x-rays") brightness(1) hue-rotate(311deg);
 }
 
 .airplane-transition--new {
@@ -48,4 +51,3 @@ body {
     color: #222222;
     animation: blinking 0.5s ease;
 }
-

@@ -1,10 +1,11 @@
 import {concatMap, exhaustMap, from, fromEvent, interval, map, mergeMap, scan, share, skipWhile, take, tap} from 'rxjs';
 import {RtlSdr, webUsb} from 'rtlsdrjs';
-import {Demodulator} from './lib/demodulator';
 import {distinctUntilChanged} from 'rxjs/src/internal/operators/distinctUntilChanged';
 import {openDB} from 'idb/with-async-ittr.js';
-import {cumulativeData, isPositionCorrect, toggle} from './helpers';
-import {decodeCPR} from "./lib/decodeCPR";
+import {cumulativeData, isPositionCorrect, toggle} from './lib/helpers';
+import {decodeCPR} from './lib/decodeCPR';
+import Demodulator from 'mode-s-demodulator';
+import {AirplaneElement} from "./airplane.element";
 
 console.log('[✈✈✈ tracker] start');
 
@@ -12,7 +13,6 @@ const connectButton = document.querySelector('.connect');
 const notifyButton = document.querySelector('.notify');
 const metaElement = document.querySelector('.meta');
 const airplanesListElement = document.querySelector('.airplanes');
-const airplaneTemplate = document.querySelector('.airplaneTemplate');
 const demodulator = new Demodulator();
 const demodulatorProcess = data => new Promise((resolve) => demodulator.process(data, 256000, resolve));
 
@@ -80,7 +80,25 @@ fromEvent(connectButton, 'click')
         console.log('[✈✈✈ tracker] db ready');
 
         const airplanesElements = (await db.getAllFromIndex(storeName, 'signupTimestamp') ?? [])
-            .map(createAirplaneElement)
+            .map(({
+                      id,
+                      callsign,
+                      type,
+                      signupTimestamp,
+                      messages,
+                      cumulativeData: {speed, altitude, heading, position, timestamp}
+                  }) => new AirplaneElement({
+                icao: id,
+                callsign,
+                type,
+                signupTimestamp,
+                messagesAmount: messages.length,
+                messageTimestamp: timestamp,
+                speed,
+                altitude,
+                heading,
+                position
+            }))
             .reverse();
 
         airplanesListElement.replaceChildren(...airplanesElements);
@@ -90,12 +108,13 @@ const ping = interval(30)
     .pipe(
         toggle(toggle$),
         skipWhile(() => !sdr), // wait till sdr is ready
-        exhaustMap(() => from(sdr.readSamples(16 * 16384)).pipe(map(samples => new Uint8Array(samples)))), // read message
-        mergeMap(samples => from(demodulatorProcess(samples))), // process message
+        exhaustMap(() => from(sdr.readSamples(16 * 16384)).pipe(map(samples => new Uint8Array(samples)))), // read samples
+        mergeMap(samples => from(demodulatorProcess(samples))), // process sample
         distinctUntilChanged(({msg: previousMsg}, {msg: currentMsg}) => previousMsg.toString() === currentMsg.toString()), // filter doubles
         map(message => ({ // Remove raw message
             ...message,
             id: message.icao.toString(16).toUpperCase(),
+            callsign: message.callsign.length > 0 ? message.callsign : null,
             timestamp: (new Date()).toISOString(),
             position: {},
             msg: undefined
@@ -110,7 +129,8 @@ ping
             return {
                 airplanes: [...airplanes, airplanes.includes(id) ? undefined : id].filter(n => !!n),
                 amountMessages: amountMessages + 1,
-                latestAirplane: `${id} ${callsign}`
+                latestAirplane: id,
+                callsign
             };
         }, {
             airplanes: [],
@@ -118,18 +138,20 @@ ping
             latestAirplane: ''
         })
     )
-    .subscribe(({airplanes, amountMessages, latestAirplane}) => {
+    .subscribe(({airplanes, amountMessages, latestAirplane, callsign}) => {
         metaElement.querySelector('.airplanes-amount').innerText = airplanes.length;
         metaElement.querySelector('.messages-amount').innerText = amountMessages;
-        metaElement.querySelector('.latest-airplane').innerText = latestAirplane;
-        metaElement.querySelector('.latest-airplane').setAttribute('href', `#airplane-${latestAirplane}`);
+
+        const lastAirplaneElement = metaElement.querySelector('.latest-airplane');
+        lastAirplaneElement.innerText = `${latestAirplane} ${callsign ?? ''}`;
+        lastAirplaneElement.setAttribute('href', `#airplane-${latestAirplane}`);
     });
 
 // Update airplane info
 ping
     .pipe(
         concatMap(async message => { // combine information
-            console.log('message', message.id, message.callsign, message.speed, message.altitude, message.heading, message.rawLatitude, message.rawLongitude)
+            console.log('message', message.id, message.callsign, message.speed, message.altitude, message.heading, message.fflag ? 'odd' : 'even', message.rawLatitude, message.rawLongitude)
 
             const id = message.id;
             const airplane = await db.get(storeName, id) ?? {
@@ -138,13 +160,12 @@ ping
                 signupTimestamp: (new Date()).toISOString(),
             };
 
-            if (!airplane.position) {
-                airplane.position = {};
-            }
-
-            airplane.type = airplane.type ? 'update' : 'new';
 
             if (message.metype >= 9 && message.metype <= 18) {
+                if (!airplane.position) {
+                    airplane.position = {};
+                }
+
                 airplane.position[message.fflag ? 'odd' : 'even'] = {
                     lat: message.rawLatitude,
                     lng: message.rawLongitude,
@@ -154,14 +175,19 @@ ping
                 // if the two messages are less than 10 seconds apart, compute the position
                 if (Math.abs(airplane.position?.even?.time - airplane.position?.odd?.time) <= 60000) {
                     const position = decodeCPR(airplane.position.odd, airplane.position.even);
+                    const correct = isPositionCorrect(position?.lat, position?.lng);
 
-                    message.position = {...position, correct: isPositionCorrect(position?.lat, position?.lng)};
+                    message.position = {
+                        ...position,
+                        correct,
+                    };
                 }
             }
 
             const updatedAirplane = {
                 ...airplane,
-                callsign: message.callsign && message.callsign.length > 0 ? message.callsign : undefined,
+                callsign: message.callsign ?? airplane.callsign,
+                type: airplane.type ? 'update' : 'new',
                 latestMessage: message,
                 messages: [...airplane.messages, message],
                 cumulativeData: cumulativeData(airplane?.cumulativeData, message)
@@ -172,86 +198,42 @@ ping
             return updatedAirplane;
         }),
     )
-    .subscribe(renderAirplane);
+    .subscribe((
+        {
+            id,
+            callsign,
+            type,
+            signupTimestamp,
+            messages,
+            cumulativeData: {speed, altitude, heading, position, timestamp}
+        }
+    ) => {
 
-function renderAirplane(data) {
-    const {type, id} = data;
+        if (type === 'new' && Notification.permission === 'granted') {
+            new Notification(`[✈✈✈ tracker] Tracking ${id}`);
+        }
 
-    if (type === 'new' && Notification.permission === 'granted') {
-        new Notification(`[✈✈✈ tracker] Tracking ${id}`);
-    }
-
-    const airplaneClone = createAirplaneElement(data);
-
-    const airplaneElement = airplanesListElement.querySelector(`#airplane-${id}`);
-    if (airplaneElement) {
-        airplaneElement.replaceWith(airplaneClone);
-    } else {
-        airplanesListElement.prepend(airplaneClone);
-    }
-}
-
-function createAirplaneElement(
-    {
-        id,
-        callsign,
-        type,
-        signupTimestamp,
-        messages,
-        cumulativeData: {callsign: cdCallsign, speed, altitude, heading, position, timestamp}
-    }
-) {
-    const airplaneClone = airplaneTemplate.content.cloneNode(true);
-    airplaneClone.querySelector('.airplane').id = `airplane-${id}`;
-    airplaneClone.querySelector('.airplane').classList.add(`airplane-transition--${type}`);
-
-    airplaneClone.querySelector('.icao').innerText = id;
-    airplaneClone.querySelector('.callsign').innerText = callsign ?? cdCallsign ?? '';
-
-    airplaneClone.querySelector('.signup-timestamp').innerText = `${signupTimestamp}`;
-    airplaneClone.querySelector('.message-timestamp').innerText = `${timestamp}`;
-    airplaneClone.querySelector('.messages-amount').innerText = messages.length;
-
-    let speedElement = airplaneClone.querySelector('.speed-knot');
-    speedElement.innerText = `${new Intl.NumberFormat('en', {
-        notation: 'standard'
-    }).format(speed ?? 0)} kts`;
-    speedElement.title = `${new Intl.NumberFormat('en', {
-        style: 'unit',
-        unit: 'kilometer-per-hour'
-    }).format(((speed ?? 0) * 1.852))}`;
-
-    let altitudeElement = airplaneClone.querySelector('.altitude-foot');
-    altitudeElement.innerText = `${new Intl.NumberFormat('en', {
-        style: 'unit',
-        unit: 'foot'
-    }).format(altitude ?? 0)}`;
-    altitudeElement.title = `${new Intl.NumberFormat('en', {
-        style: 'unit',
-        unit: 'meter'
-    }).format(((altitude ?? 0) * 0.3048))}`;
-
-    airplaneClone.querySelector('.heading').innerText = `${new Intl.NumberFormat('en', {
-        style: 'unit',
-        unit: 'degree'
-    }).format(heading ?? 0)}`;
-    airplaneClone.querySelector('.heading-arrow').style = `transform: rotate(${heading}deg);`;
-
-    if (position?.correct) {
-        airplaneClone.querySelector('.lat').innerText = position.lat;
-        airplaneClone.querySelector('.lng').innerText = position.lng;
-    }
-
-    fromEvent(airplaneClone.querySelector('.airplane'), 'animationend')
-        .pipe(
-            take(1)
-        )
-        .subscribe(({target}) => {
-            target.classList.remove(`airplane-transition--${type}`);
+        const airplaneClone = new AirplaneElement({
+            icao: id,
+            callsign,
+            type,
+            signupTimestamp,
+            messagesAmount: messages.length,
+            messageTimestamp: timestamp,
+            speed,
+            altitude,
+            heading,
+            position
         });
 
-    return airplaneClone;
-}
+        const airplaneElement = airplanesListElement.querySelector(`#airplane-${id}`);
+        if (airplaneElement) {
+            airplaneElement.replaceWith(airplaneClone);
+        } else {
+            airplanesListElement.prepend(airplaneClone);
+        }
+    });
+
 
 fromEvent(notifyButton, 'click')
     .subscribe(() => {
@@ -267,3 +249,8 @@ fromEvent(notifyButton, 'click')
                 });
         }
     });
+
+navigator.serviceWorker.register(
+    new URL('service-worker.js', import.meta.url),
+    {type: 'module'}
+).then(() => console.log('[✈✈✈ tracker] register serviceworker'));
