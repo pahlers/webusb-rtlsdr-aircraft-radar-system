@@ -27,10 +27,9 @@ const html = `
             ALT: <span class="altitude-foot">--</span><br>
             HDG: <span class="heading">--</span> <span class="heading-arrow">⇮</span>
         </p>
-        <p>
+        <p class="position">
             LAT: <span class="lat">--</span><br>
             LNG: <span class="lng">--</span><br>
-            <img alt="map" class="map hidden" part="map">
         </p>
 `;
 
@@ -148,9 +147,13 @@ export class AirplaneElement extends HTMLElement {
 
             const {url} = generateMapUrl(this.#positionLat, this.#positionLng, 12, 'https://tile.openstreetmap.org');
 
-            const mapElement = node.querySelector('.map');
+            const mapElement = document.createElement('img');
+            mapElement.alt = '';
             mapElement.src = url;
-            mapElement.classList.remove('hidden');
+            mapElement.classList.add('map');
+            mapElement.part.add('map');
+
+            node.querySelector('.position').append(mapElement);
         }
 
         fromEvent(airplaneElement, 'animationend')

@@ -1,2 +1,2 @@
 /*
-  Content-Security-Policy: default-src 'self'; img-src 'self' https://tile.openstreetmap.org;
+  Content-Security-Policy: default-src 'self'; img-src 'self' https://tile.openstreetmap.org; style-src 'self' 'sha256-ek6rOvuVHQgdpAYNAtknqI+5h6ihGyifjBywIIh4gKs='; connect-src 'self' https://tile.openstreetmap.org;
